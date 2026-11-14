@@ -1,0 +1,474 @@
+@import "tailwindcss";
+
+/*
+ * Platform design system (v1.0, 02/10/2026 — see design/claude-design).
+ * Every color goes through CSS variables to support dark mode ([data-theme=dark] on <html>).
+ * The old Tailwind color scales (slate, indigo, emerald, rose, amber, sky, violet, orange) are remapped to tokens,
+ * so the whole app uses exactly one palette: ink / primary / good / bad / warning / info / AI / Meta change.
+ */
+
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+:root,
+[data-theme="light"] {
+  /* Background & text */
+  --bg: #f6f8fb;
+  --panel: #ffffff;
+  --side: #fafbfd;
+  --soft: #f2f5f9;
+  --hover: #e8edf4;
+  --line: #e2e7ee;
+  --line2: #eef1f6;
+  --ink: #14203a;
+  --ink2: #3d4a60;
+  --mut: #5a6679;
+  --mut2: #8a94a6;
+  --overlay: rgba(15, 16, 20, 0.42);
+  --shadow-pop: 0 12px 40px rgba(16, 18, 24, 0.16);
+
+  /* Neutral scale (cool slate, Brand Hub Slate #3D4A60) */
+  --n50: #f6f8fb;
+  --n100: #f2f5f9;
+  --n200: #e2e7ee;
+  --n300: #d1d8e2;
+  --n400: #8a94a6;
+  --n500: #5a6679;
+  --n600: #4a5669;
+  --n700: #3d4a60;
+  --n800: #253048;
+  --n900: #14203a;
+  --n950: #0c1424;
+
+  /* Primary: Workzone blue (Brand Hub: Azure #2F7FD1, Navy #1C3D6E, Sky #6FA8E0, Sky tint #DCEAF9) */
+  --p50: #f0f6fd;
+  --p100: #dceaf9;
+  --p200: #c2daf3;
+  --p300: #93bce8;
+  --p400: #6fa8e0;
+  --p500: #2b7cd3;
+  --p600: #2f7fd1;
+  --p700: #24609f;
+  --p800: #1c3d6e;
+  --p900: #142d52;
+
+  /* Good (emerald) */
+  --g50: #e9f8ef;
+  --g100: #d3f1de;
+  --g200: #b5e6c6;
+  --g300: #86d3a3;
+  --g400: #4fb878;
+  --g500: #1f9d55;
+  --g600: #15803d;
+  --g700: #15803d;
+  --g800: #116932;
+  --g900: #0d5228;
+
+  /* Bad / urgent (rose) */
+  --b50: #fdf0ee;
+  --b100: #fbe1dd;
+  --b200: #f6c6bf;
+  --b300: #eea095;
+  --b400: #e2705f;
+  --b500: #d4503f;
+  --b600: #c0362c;
+  --b700: #a92d24;
+  --b800: #8c251e;
+  --b900: #6f1d18;
+
+  /* Warning (amber) */
+  --w50: #fdf5dd;
+  --w100: #faebbd;
+  --w200: #f3d98a;
+  --w300: #ebc35a;
+  --w400: #d49b1c;
+  --w500: #c18a12;
+  --w600: #a3720a;
+  --w700: #8a5a00;
+  --w800: #734a00;
+  --w900: #5c3b00;
+
+  /* Info / running (teal, kept apart from the blue primary) */
+  --i50: #e6f6f7;
+  --i100: #ccecef;
+  --i200: #9fdbe0;
+  --i300: #66c2ca;
+  --i400: #2aa5b0;
+  --i500: #0e8a96;
+  --i600: #0b6f7a;
+  --i700: #0b6f7a;
+  --i800: #0a5961;
+  --i900: #08464d;
+
+  /* AI / Claude (violet) */
+  --a50: #f4f0fe;
+  --a100: #ebe4fd;
+  --a200: #e3dafb;
+  --a300: #c4b3f6;
+  --a400: #a185ee;
+  --a500: #8b5cf6;
+  --a600: #6d28d9;
+  --a700: #6d28d9;
+  --a800: #5b21b6;
+  --a900: #4c1d95;
+
+  /* Real ad changes on Meta (orange) — only for actions that change Meta */
+  --m50: #fff3ea;
+  --m100: #ffe6d3;
+  --m200: #fbd5bd;
+  --m300: #f8b48a;
+  --m400: #f08a4f;
+  --m500: #ea580c;
+  --m600: #ea580c;
+  --m700: #c2410c;
+  --m800: #9a3412;
+  --m900: #7c2d12;
+
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --bg: #0d1420;
+  --panel: #131b2a;
+  --side: #0a101a;
+  --soft: #1a2334;
+  --hover: #1b2537;
+  --line: #253047;
+  --line2: #1d2638;
+  --ink: #eef2f8;
+  --ink2: #c5cedc;
+  --mut: #95a0b4;
+  --mut2: #6b778c;
+  --overlay: rgba(0, 0, 0, 0.62);
+  --shadow-pop: 0 12px 40px rgba(0, 0, 0, 0.55);
+
+  --n50: #161f2f;
+  --n100: #1a2334;
+  --n200: #253047;
+  --n300: #344059;
+  --n400: #6b778c;
+  --n500: #95a0b4;
+  --n600: #adb7c8;
+  --n700: #c5cedc;
+  --n800: #dfe5ee;
+  --n900: #eef2f8;
+  --n950: #f8fafc;
+
+  --p50: #12213a;
+  --p100: #172b4a;
+  --p200: #1f3b63;
+  --p300: #2d5a92;
+  --p400: #4f93dc;
+  --p500: #6fa8e0;
+  --p600: #2f7fd1;
+  --p700: #93bce8;
+  --p800: #bcd6f2;
+  --p900: #dceaf9;
+
+  --g50: #13281c;
+  --g100: #173322;
+  --g200: #1f4a30;
+  --g300: #2e6b45;
+  --g400: #3f9a63;
+  --g500: #4cc07a;
+  --g600: #5fd48f;
+  --g700: #5fd48f;
+  --g800: #8ae3ad;
+  --g900: #b6efcb;
+
+  --b50: #3a1d1b;
+  --b100: #4a2421;
+  --b200: #6b302b;
+  --b300: #8f4038;
+  --b400: #d65f55;
+  --b500: #ff7b72;
+  --b600: #ff7b72;
+  --b700: #ff958d;
+  --b800: #ffb3ad;
+  --b900: #ffd2ce;
+
+  --w50: #33280f;
+  --w100: #3d3012;
+  --w200: #5a4618;
+  --w300: #7d6020;
+  --w400: #e0a93a;
+  --w500: #f0c060;
+  --w600: #f0c060;
+  --w700: #f0c060;
+  --w800: #f6d68f;
+  --w900: #fae7bd;
+
+  --i50: #0f2a2d;
+  --i100: #12343a;
+  --i200: #194a51;
+  --i300: #236a73;
+  --i400: #3fb3bd;
+  --i500: #5fd0d9;
+  --i600: #5fd0d9;
+  --i700: #5fd0d9;
+  --i800: #9ae4ea;
+  --i900: #c9f2f5;
+
+  --a50: #241d38;
+  --a100: #2c2345;
+  --a200: #3a2f5a;
+  --a300: #54447f;
+  --a400: #8f73e6;
+  --a500: #b69cff;
+  --a600: #7c4ddb;
+  --a700: #b69cff;
+  --a800: #d3c4ff;
+  --a900: #e8e0ff;
+
+  --m50: #3a2412;
+  --m100: #45291a;
+  --m200: #5a3518;
+  --m300: #7d4a22;
+  --m400: #e07a3c;
+  --m500: #ea6a2a;
+  --m600: #c2410c;
+  --m700: #ffa66b;
+  --m800: #ffc499;
+  --m900: #ffe0c7;
+
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-sans: var(--font-geist);
+  --font-mono: var(--font-geist-mono);
+
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-side: var(--side);
+  --color-soft: var(--soft);
+  --color-hover: var(--hover);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-ink2: var(--ink2);
+  --color-mut: var(--mut);
+  --color-mut2: var(--mut2);
+  --shadow-pop: var(--shadow-pop);
+
+  --color-slate-50: var(--n50);
+  --color-slate-100: var(--n100);
+  --color-slate-200: var(--n200);
+  --color-slate-300: var(--n300);
+  --color-slate-400: var(--n400);
+  --color-slate-500: var(--n500);
+  --color-slate-600: var(--n600);
+  --color-slate-700: var(--n700);
+  --color-slate-800: var(--n800);
+  --color-slate-900: var(--n900);
+  --color-slate-950: var(--n950);
+
+  --color-indigo-50: var(--p50);
+  --color-indigo-100: var(--p100);
+  --color-indigo-200: var(--p200);
+  --color-indigo-300: var(--p300);
+  --color-indigo-400: var(--p400);
+  --color-indigo-500: var(--p500);
+  --color-indigo-600: var(--p600);
+  --color-indigo-700: var(--p700);
+  --color-indigo-800: var(--p800);
+  --color-indigo-900: var(--p900);
+
+  --color-emerald-50: var(--g50);
+  --color-emerald-100: var(--g100);
+  --color-emerald-200: var(--g200);
+  --color-emerald-300: var(--g300);
+  --color-emerald-400: var(--g400);
+  --color-emerald-500: var(--g500);
+  --color-emerald-600: var(--g600);
+  --color-emerald-700: var(--g700);
+  --color-emerald-800: var(--g800);
+  --color-emerald-900: var(--g900);
+
+  --color-rose-50: var(--b50);
+  --color-rose-100: var(--b100);
+  --color-rose-200: var(--b200);
+  --color-rose-300: var(--b300);
+  --color-rose-400: var(--b400);
+  --color-rose-500: var(--b500);
+  --color-rose-600: var(--b600);
+  --color-rose-700: var(--b700);
+  --color-rose-800: var(--b800);
+  --color-rose-900: var(--b900);
+
+  --color-amber-50: var(--w50);
+  --color-amber-100: var(--w100);
+  --color-amber-200: var(--w200);
+  --color-amber-300: var(--w300);
+  --color-amber-400: var(--w400);
+  --color-amber-500: var(--w500);
+  --color-amber-600: var(--w600);
+  --color-amber-700: var(--w700);
+  --color-amber-800: var(--w800);
+  --color-amber-900: var(--w900);
+
+  --color-sky-50: var(--i50);
+  --color-sky-100: var(--i100);
+  --color-sky-200: var(--i200);
+  --color-sky-300: var(--i300);
+  --color-sky-400: var(--i400);
+  --color-sky-500: var(--i500);
+  --color-sky-600: var(--i600);
+  --color-sky-700: var(--i700);
+  --color-sky-800: var(--i800);
+  --color-sky-900: var(--i900);
+
+  --color-violet-50: var(--a50);
+  --color-violet-100: var(--a100);
+  --color-violet-200: var(--a200);
+  --color-violet-300: var(--a300);
+  --color-violet-400: var(--a400);
+  --color-violet-500: var(--a500);
+  --color-violet-600: var(--a600);
+  --color-violet-700: var(--a700);
+  --color-violet-800: var(--a800);
+  --color-violet-900: var(--a900);
+
+  --color-orange-50: var(--m50);
+  --color-orange-100: var(--m100);
+  --color-orange-200: var(--m200);
+  --color-orange-300: var(--m300);
+  --color-orange-400: var(--m400);
+  --color-orange-500: var(--m500);
+  --color-orange-600: var(--m600);
+  --color-orange-700: var(--m700);
+  --color-orange-800: var(--m800);
+  --color-orange-900: var(--m900);
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--p600);
+  outline-offset: 2px;
+}
+
+@keyframes wz-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Print is always light. */
+@media print {
+  :root,
+  [data-theme="dark"] {
+    color-scheme: light;
+  }
+}
+
+/* Orbit-style optimization loop (components/loop-orbit.tsx): light follows the shared palette, dark is control-room style. */
+.wz-orbit {
+  --o-bg: var(--panel);
+  --o-kpi: var(--panel);
+  --o-line: #e3e5ea;
+  --o-ring: #eef0f4;
+  --o-star: #c9ccd3;
+  --o-text: var(--ink);
+  --o-mut: var(--mut);
+  --o-chip: var(--panel);
+  --o-chip-line: var(--line);
+  --o-hub-fill: var(--soft);
+  --o-hub-track: #e6e7ea;
+  --o-ok: #1d9e75;
+  --o-warn: #ba7517;
+  --o-bad: #d04545;
+  --o-off: #a3a7b1;
+  --o-ok-fill: #e1f5ee;
+  --o-warn-fill: #faeeda;
+  --o-bad-fill: #fcebeb;
+  --o-off-fill: #f1f2f4;
+  --o-ok-ink: #0f6e56;
+  --o-warn-ink: #854f0b;
+  --o-bad-ink: #a32d2d;
+  --o-off-ink: #5d6170;
+  --o-spark-ok: #1d9e75;
+  --o-spark-warn: #ba7517;
+}
+[data-theme="dark"] .wz-orbit {
+  --o-bg: #0a0f1e;
+  --o-kpi: #111830;
+  --o-line: #1e2847;
+  --o-ring: #1c2644;
+  --o-star: #3a4670;
+  --o-text: #f2f4fa;
+  --o-mut: #7f89a3;
+  --o-chip: #111830;
+  --o-chip-line: #26304f;
+  --o-hub-fill: #0e1528;
+  --o-hub-track: #1d2746;
+  --o-ok: #2ee6a6;
+  --o-warn: #f5b342;
+  --o-bad: #ff6b6b;
+  --o-off: #4a5578;
+  --o-ok-fill: #131b33;
+  --o-warn-fill: #131b33;
+  --o-bad-fill: #131b33;
+  --o-off-fill: #131b33;
+  --o-ok-ink: #2ee6a6;
+  --o-warn-ink: #f5b342;
+  --o-bad-ink: #ff6b6b;
+  --o-off-ink: #7f89a3;
+  --o-spark-ok: #b8ffe5;
+  --o-spark-warn: #ffe2a8;
+}
+.wz-pulse,
+.wz-spin {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.wz-spin {
+  transform-box: view-box;
+  transform-origin: 340px 300px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .wz-pulse {
+    animation: wz-pulse 2.4s ease-out infinite;
+  }
+  .wz-spin {
+    animation: wz-spin 40s linear infinite;
+  }
+}
+@keyframes wz-pulse {
+  from {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.3);
+  }
+}
+@keyframes wz-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* iPhone zooms in when tapping an input with text < 16px: on narrow touch screens, inputs are always 16px.
+   Outside @layer so it beats Tailwind's text-xs/text-sm classes. */
+@media (max-width: 767px) and (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+  /* Larger checkboxes for easier tapping. */
+  input[type="checkbox"]:not(.sr-only),
+  input[type="radio"]:not(.sr-only) {
+    width: 18px;
+    height: 18px;
+  }
+}

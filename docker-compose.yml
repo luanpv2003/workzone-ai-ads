@@ -1,0 +1,133 @@
+# Workzone AI Ads: everything needed to run it, on your computer or on your own server.
+#   ./scripts/install.sh          first install and every update (creates .env, builds, starts, waits)
+#   docker compose ps             what is running
+#   docker compose logs -f app    follow the web app's log (worker, scheduler, db likewise)
+#   docker compose down           stop (data is kept in the named volumes below)
+# Settings come from .env (see .env.example). Docs: docs/install.md, docs/server.md.
+
+name: workzone-ai-ads
+
+x-runtime-env: &runtime-env
+  # Inside Docker the database is the "db" service; this overrides DATABASE_URL from .env.
+  DATABASE_URL: postgresql://ads:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (run scripts/install.sh)}@db:5432/ads
+  NODE_ENV: production
+
+x-build-args: &build-args
+  NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-Workzone AI Ads}
+  NEXT_PUBLIC_OPERATOR_NAME: ${NEXT_PUBLIC_OPERATOR_NAME:-}
+  NEXT_PUBLIC_OPERATOR_SITE: ${NEXT_PUBLIC_OPERATOR_SITE:-}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ads
+      POSTGRES_USER: ads
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (run scripts/install.sh)}
+    volumes:
+      - db:/var/lib/postgresql/data
+    # Not published to the host. To reach it from your machine (psql, backups), use
+    # `docker compose exec db psql -U ads ads`, or add e.g. `ports: ["127.0.0.1:5433:5432"]`.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ads -d ads"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Web app. Applies database migrations on every start, then serves on port 3000 inside the container.
+  app:
+    build:
+      context: .
+      target: app
+      args: *build-args
+    image: ${WZ_IMAGE:-workzone-ai-ads}-app:${WZ_TAG:-local}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *runtime-env
+    ports:
+      # 127.0.0.1 = only this machine can open it (on a server, a reverse proxy in front adds HTTPS: docs/server.md).
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-3000}:3000"
+    volumes:
+      - appdata:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login',{redirect:'manual'}).then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Background process: client jobs (sync, AI analysis, campaign drafts), message sync every 2 minutes,
+  # ad metrics every 15 minutes, follow-ups, lead notifications, report schedules, targeting library scans.
+  worker:
+    build:
+      context: .
+      target: worker
+    image: ${WZ_IMAGE:-workzone-ai-ads}-worker:${WZ_TAG:-local}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    env_file: .env
+    environment:
+      <<: *runtime-env
+    volumes:
+      - appdata:/app/data
+    depends_on:
+      app:
+        condition: service_healthy
+
+  # Hourly schedule (replaces the cron line `npm run daily`): full syncs and AI analysis on each client's
+  # schedule, campaign optimisation, automation rules, token checks, Google Ads sync. Runs at start, then at :05 every hour.
+  scheduler:
+    build:
+      context: .
+      target: worker
+    image: ${WZ_IMAGE:-workzone-ai-ads}-worker:${WZ_TAG:-local}
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      <<: *runtime-env
+    volumes:
+      - appdata:/app/data
+    command:
+      - sh
+      - -c
+      - |
+        while :; do
+          tsx scripts/daily.ts || echo "daily run failed (see above), retrying next hour"
+          s=$$(( 3900 - $$(date +%s) % 3600 )); [ $$s -gt 3600 ] && s=$$(( s - 3600 ))
+          sleep $$s & wait $$!
+        done
+    depends_on:
+      app:
+        condition: service_healthy
+
+  # Optional HTTPS for a server with a domain: `docker compose --profile https up -d` (set DOMAIN in .env).
+  # Caddy gets and renews a Let's Encrypt certificate automatically. See docs/server.md.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    # X-Real-IP = the real client address (overwrites any value the client sent); used with TRUST_PROXY=true in .env.
+    command: ["caddy", "reverse-proxy", "--from", "${DOMAIN:-localhost}", "--to", "app:3000", "--header-up", "X-Real-IP: {remote_host}"]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  db:
+  # Uploaded creatives, Knowledge base documents, message images, targeting catalog.
+  appdata:
+  caddy_data:
+  caddy_config:

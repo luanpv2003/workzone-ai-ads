@@ -1,0 +1,1403 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// One agency client = one ad account + one Facebook Page.
+model Client {
+  id          String         @id @default(cuid())
+  name        String
+  // Workspace that owns the client (like a Business Manager owning an ad account).
+  workspaceId String
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id])
+  access      ClientAccess[]
+  industry    String
+  industryKey String? // standard industry (lib/industries.ts) for pooling targeting performance across clients
+  // Product/service description, USP, pricing, sales area, tone of voice: Claude reads this section.
+  brief       String         @default("")
+  currency    String         @default("VND")
+  timezone    String         @default("Asia/Ho_Chi_Minh")
+
+  // KPI targets
+  primaryResult     String  @default("messages") // messages | leads | purchases | link_clicks
+  targetCpr         Float? // target cost per result
+  autoTargetCpr     Float? // system-suggested from 90-day history when not entered manually (lib/target-cpr.ts)
+  autoTargetCprNote String? // JSON explaining how the suggested value was computed
+  targetRoas        Float?
+
+  // Safety limits when applying suggestions
+  maxDailyBudget     Float? // max total budget/day for one campaign
+  maxBudgetChangePct Float  @default(30) // each budget change may not exceed ±%
+
+  // Data used to score persona & targeting
+  analysisDays      Int       @default(90) // days of ad metrics (including paused campaigns); the most recent 30 days count double
+  minResults        Int       @default(20) // how many results are needed before tagging "Verified"
+  conversationLimit Int       @default(500) // number of most recent conversations to download & analyze (in batches of 50)
+  readImages        Boolean   @default(false) // Read images customers send in messages: download small compressed copies (data/msg-images), Claude views them during analysis
+  briefUpdatedAt    DateTime? // last brief edit: if after the last persona build, show "should re-analyze"
+
+  // Automatic update schedule (scripts/daily.ts runs hourly, see lib/schedule.ts)
+  syncMode           String    @default("hours") // hours (the hours in syncHours) | manual
+  syncHours          String    @default("6,12,18") // local hours for full sync, used by "hours"
+  aiMode             String    @default("daily")
+  optimizeMode       String    @default("manual") // hours (every hour in optimizeHours) | manual: automatically review running campaigns
+  optimizeHours      String    @default("8,20") // local hours to review
+  lastOptimizeAt     DateTime?
+  // Optimization thresholds (edited in Settings → Campaign optimization thresholds)
+  optWarnPct         Int       @default(20) // how many % above the benchmark triggers a warning
+  optPausePct        Int       @default(40) // how many % above the benchmark triggers action on expensive ad sets / ads
+  optExpensiveMode   String    @default("suggest") // suggest: suggest pausing (needs approval) | warn: warn only, do not suggest pausing
+  optMinSpendX       Float     @default(2) // must spend ≥ X times the benchmark CPR before concluding expensive / cheap
+  optConfidence      Int       @default(90) // minimum statistical confidence (%) to suggest a change
+  optFreqMax         Float     @default(3) // 7-day frequency above this + falling CTR = audience fatigue
+  optBudgetStepPct   Int       @default(25) // budget increase step in % (still within the budget change % limit) // daily | on_change | manual: Claude runs only when there is new data
+  optMinAgeDays      Int       @default(1) // new ad sets / ads must run at least X days before regular rules apply (early cut does not wait)
+  optEarlyPct        Int       @default(100) // early cut: ≥ X% above target (100 = double) ...
+  optEarlySpendX     Float     @default(3) // ... and already spent ≥ X times the target CPR, even if the ad set is new / still learning
+  optScaleGapHours   Int       @default(24) // two budget increases on the same object must be at least X hours apart
+  optScaleMinResults Int       @default(5) // a winning ad set needs at least X results before its budget is increased
+  optScaleConfidence Int       @default(80) // confidence (%) that the ad set is cheaper than benchmark to increase budget (separate from optConfidence used for pausing: a wrong increase is capped + reversible)
+  optScaleSpendPct   Int       @default(90) // "out of budget": today's spend ≥ X% of daily budget ...
+  optScaleBeforeHour Int       @default(18) // ... before hour X (spending it all by end of day is normal)
+  // Automation (lib/auto-rules.ts): off | dryrun (trial: only logs "would have done") | on (acts within limits)
+  autoMode           String    @default("off")
+  autoPause          Boolean   @default(true) // auto-pause expensive or non-converting ad sets / ads
+  autoScale          Boolean   @default(true) // auto-increase budget of winning ad sets that are running out of budget (requires a daily budget cap)
+  autoFromHour       Int       @default(7) // check every hour within this local time window
+  autoToHour         Int       @default(22)
+  autoNotify         Boolean   @default(true) // report actions taken automatically (internal, not sent to client groups)
+  autoNotifyTargets  String    @default("[]") // JSON NotifyTarget[]: internal groups / private bot chats that receive automation notifications
+  lastAutoRunAt      DateTime?
+  lastAutoSyncAt     DateTime?
+  lastAutoAiAt       DateTime?
+
+  // Meta connection
+  dataSource         String    @default("mock") // mock | meta
+  metaAdAccountId    String? // act_123...
+  metaPageId         String? // main Page
+  metaPageName       String?
+  metaExtraPages     String    @default("[]") // JSON [{id, name, instagramId}]: the same client's other Pages (sharing the persona)
+  metaInstagramId    String? // Instagram business account ID (for Instagram Direct / profile visits)
+  audienceOrigin     String    @default("vn") // target customers: vn | foreign (foreign customers) | mixed; see lib/foreign-targeting.ts
+  storeLat           Float? // store coordinates for radius pinning
+  storeLng           Float?
+  metaAccessToken    String? // AES-GCM encrypted, see lib/crypto.ts
+  metaTokenExpiresAt DateTime? // null = never expires or not checked yet
+  metaTokenOwnerId   String? // ID of the Facebook account that owns the token (to bulk-update clients sharing a token)
+  metaTokenOwner     String?
+  metaTokenMissing   String? // JSON string[] of missing permissions
+  metaTokenError     String? // error from the last check/sync
+  metaTokenCheckedAt DateTime?
+  lastSyncedAt       DateTime?
+
+  // Google Sheet lead list connection (Forms + Messages), see lib/lead-sheet.ts
+  sheetKeyHash    String? // sha256 of the secret key in the link
+  sheetKey        String? // AES-GCM encrypted, to show the link again on the web
+  sheetSeenAt     DateTime? // last time the Google Sheet called in
+  sheetLinkedAt   DateTime? // when the link was created / changed
+  sheetRows       Int? // number of leads sent to the Sheet last time
+  sheetFeedbackAt DateTime? // last time the Sheet sent sales feedback
+  sheetScriptV    Int? // version of the Apps Script snippet the Sheet uses (null = first version, did not send ?v=)
+  sheetAuto       Boolean? // Sheet reports it has a 15-minute auto-run trigger
+  sheetSince      DateTime? // only send leads from this date to the Sheet (null = all)
+
+  // Client reports (link /r/<key>, email, Telegram, Zalo OA), see lib/client-report.ts
+  reportPhones   String @default("[]") // JSON [{name, phone}] Zalo OA recipients on the client side
+  reportEmails   String @default("[]") // JSON [{name, email}]
+  reportTelegram String @default("[]") // JSON [{title, chatId}] Telegram groups / recipients (the platform's bot)
+
+  // New-lead notifications to a Zalo group (Zalo Bot) / Telegram, see lib/lead-notify.ts
+  leadNotify String @default("{}") // JSON {on, since, form, chat, targets: [{channel, chatId, title}]}
+
+  // Google Ads (lib/google-ads.ts): ad accounts sit under the platform's MCC, shared connection in API connections → Google Ads
+  googleCustomerId  String? // 10 digits, no dashes
+  googleAccountName String?
+  googleCurrency    String?
+  googleSyncedAt    DateTime?
+  googleSyncError   String?
+
+  // KiotViet (lib/kiotviet.ts, kiotviet-sync.ts): read-only access to the store's branches, customers, invoices; never writes to KiotViet
+  kiotRetailer  String? // store name (Retailer header)
+  kiotClientId  String?
+  kiotSecret    String? // Client Secret, AES-GCM encrypted
+  kiotMonths    Int       @default(12) // first run pulls N months of invoices back
+  kiotState     String    @default("{}") // JSON sync progress (see KiotState in kiotviet-sync.ts)
+  kiotSyncAt    DateTime? // last completed sync
+  kiotSyncError String?
+  kiotRequestAt DateTime? // user clicked "Sync now" (worker picks it up within ~1 minute)
+  kiotRunningAt DateTime? // heartbeat while syncing
+
+  // HighLevel CRM (lib/highlevel.ts, highlevel-sync.ts): push leads with a phone number (lead forms + messages) to HighLevel,
+  // pull pipeline stages back as sales feedback (SalesFeedback, source "crm").
+  ghlLocationId     String?
+  ghlToken          String? // sub-account Private Integration token, AES-GCM encrypted
+  ghlLocation       String? // sub-account name (at connection check)
+  ghlPipelines      String    @default("[]") // JSON GhlPipeline[]: pipelines + stages read at connection check (for mapping on the web)
+  ghlPipelineId     String? // pipeline receiving leads
+  ghlStageId        String? // stage assigned to new leads
+  ghlStageMap       String    @default("{}") // JSON {stageId: {contact, quality, outcome}}: stage → sales feedback
+  ghlPush           Boolean   @default(true) // auto-push new leads
+  ghlSince          DateTime? // only push leads from this point (default: connection time)
+  ghlSyncAt         DateTime?
+  ghlSyncError      String?
+  ghlRequestAt      DateTime? // "Sync now" clicked / HighLevel webhook / feedback edited on the web (worker picks it up within ~1 minute)
+  ghlReverseMap     String    @default("{}") // JSON {"<field>:<value>": stageId | "won" | "lost"}: feedback edited on the web → HighLevel stage
+  ghlDealPipelineId String? // contract pipeline (e.g. Enrollment): Won = Closed, Lost = Not buying
+  ghlHookKey        String?   @unique // secret key of the webhook /api/ghl/<key> (HighLevel workflow calls it on stage change)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaigns         Campaign[]
+  adSets            AdSet[]
+  ads               Ad[]
+  dailyMetrics      DailyMetric[]
+  conversations     Conversation[]
+  audits            Audit[]
+  recommendations   Recommendation[]
+  drafts            CampaignDraft[]
+  activities        Activity[]
+  knowledge         KnowledgeDoc[]
+  audienceAnalyses  AudienceAnalysis[]
+  targetingRankings TargetingRanking[]
+  pagePosts         PagePost[]
+  adSetHistory      AdSetHistory[]
+  leads             Lead[]
+  ownAds            OwnAd[]
+  targetingStats    TargetingClientStat[]
+  adBreakdowns      AdBreakdown[]
+  jobs              ClientJob[]
+  proposals         CampaignProposal[]
+  contentReviews    ContentReview[]
+  nurtureFlows      NurtureFlow[]
+  nurtureSends      NurtureSend[]
+  nurtureOptOuts    NurtureOptOut[]
+  salesFeedback     SalesFeedback[]
+  clientReports     ClientReport[]
+  reportSchedules   ReportSchedule[]
+  leadNotices       LeadNotice[]
+  gadsCampaigns     GAdsCampaign[]
+  gadsAdGroups      GAdsAdGroup[]
+  gadsKeywords      GAdsKeyword[]
+  gadsSearchTerms   GAdsSearchTerm[]
+  gadsAds           GAdsAd[]
+  gadsDaily         GAdsDaily[]
+  gadsChanges       GAdsChange[]
+  kvBranches        KvBranch[]
+  kvCustomers       KvCustomer[]
+  kvInvoices        KvInvoice[]
+  kvDaily           KvDaily[]
+  kvProductDaily    KvProductDaily[]
+  salesLifts        SalesLift[]
+  ghlLinks          GhlLink[]
+}
+
+// Metrics on Campaign/AdSet/Ad are the last 7 days as of the most recent sync.
+model Campaign {
+  id          String    @id // Meta campaign id
+  clientId    String
+  client      Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  name        String
+  objective   String
+  status      String // ACTIVE | PAUSED | ARCHIVED
+  dailyBudget Float?
+  resultType  String    @default("messages")
+  spend       Float     @default(0)
+  impressions Int       @default(0)
+  reach       Int       @default(0)
+  clicks      Int       @default(0)
+  results     Int       @default(0)
+  revenue     Float     @default(0)
+  createdTime DateTime?
+  adSets      AdSet[]
+  ads         Ad[]
+}
+
+model AdSet {
+  id               String   @id
+  clientId         String
+  client           Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  campaignId       String
+  campaign         Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  name             String
+  status           String
+  dailyBudget      Float?
+  optimizationGoal String   @default("")
+  targeting        String   @default("{}") // JSON
+  spend            Float    @default(0)
+  impressions      Int      @default(0)
+  reach            Int      @default(0)
+  clicks           Int      @default(0)
+  results          Int      @default(0)
+  revenue          Float    @default(0)
+  ads              Ad[]
+
+  @@index([campaignId]) // foreign key (see Ad)
+}
+
+model Ad {
+  id          String   @id
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  campaignId  String
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  adSetId     String
+  adSet       AdSet    @relation(fields: [adSetId], references: [id], onDelete: Cascade)
+  name        String
+  status      String
+  primaryText String   @default("")
+  headline    String   @default("")
+  spend       Float    @default(0)
+  impressions Int      @default(0)
+  reach       Int      @default(0)
+  clicks      Int      @default(0)
+  results     Int      @default(0)
+  revenue     Float    @default(0)
+
+  // Foreign keys: child ads are looked up by these columns.
+  @@index([campaignId])
+  @@index([adSetId])
+}
+
+model DailyMetric {
+  id          String @id @default(cuid())
+  clientId    String
+  client      Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  date        String // YYYY-MM-DD
+  spend       Float  @default(0)
+  impressions Int    @default(0)
+  clicks      Int    @default(0)
+  results     Int    @default(0)
+  revenue     Float  @default(0)
+
+  @@unique([clientId, date])
+}
+
+model Conversation {
+  id           String    @id // Meta conversation id
+  clientId     String
+  pageId       String? // the client Page this data belongs to (null = legacy data, main Page)
+  client       Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  customerName String
+  updatedTime  DateTime
+  // Source: ad_id if the customer came from a click-to-Messenger ad (referral), if available
+  sourceAdId   String?
+  // Has Meta's system message "… replied to an ad": customer came from an ad (even when the webhook doesn't say which ad)
+  adReply      Boolean   @default(false)
+  messages     Message[]
+  // Contact book: phone / email customers type in messages (extracted by code, not sent to Claude), link to the conversation in the Page inbox
+  phone        String?
+  email        String?
+  phones       String    @default("[]") // JSON: all phone numbers the customer sent
+  link         String?
+  psid         String? // Page-scoped user ID (to match webhooks: which ad the customer came from)
+
+  // Claude's analysis results (null if not analyzed yet)
+  intent         String?
+  stage          String? // new | interested | considering | ready_to_buy | purchased | lost | spam
+  sentiment      String? // positive | neutral | negative
+  leadScore      Int?
+  tags           String? // JSON string[]
+  needsReply     Boolean?
+  suggestedReply String?
+  analysisNote   String?
+  analyzedAt     DateTime?
+
+  @@index([clientId, updatedTime]) // foreign key: filter "conversation: { clientId }", client deletion, conversation list
+}
+
+model Message {
+  id             String       @id
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  fromCustomer   Boolean
+  text           String
+  images         String? // JSON: compressed image file names in data/msg-images (only when the client enabled image reading; deleted beyond the 1000 most recent conversations)
+  createdTime    DateTime
+
+  // Without this index every "messages: { some }" filter and every per-conversation read scans the whole Message table.
+  @@index([conversationId, createdTime])
+}
+
+model Audit {
+  id              String           @id @default(cuid())
+  clientId        String
+  client          Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kind            String // account | conversations
+  score           Int?
+  summary         String
+  report          String // JSON, structure per lib/ai/schemas.ts
+  model           String
+  inputTokens     Int              @default(0)
+  outputTokens    Int              @default(0)
+  createdAt       DateTime         @default(now())
+  recommendations Recommendation[]
+}
+
+model Recommendation {
+  id             String    @id @default(cuid())
+  clientId       String
+  client         Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  auditId        String?
+  audit          Audit?    @relation(fields: [auditId], references: [id], onDelete: SetNull)
+  title          String
+  rationale      String
+  priority       String // high | medium | low
+  expectedImpact String    @default("")
+  actionType     String // pause | resume | update_budget | manual
+  targetLevel    String? // campaign | adset | ad
+  targetId       String?
+  targetName     String?
+  newDailyBudget Float?
+  status         String    @default("pending") // pending | executed | rejected | failed | done
+  result         String?
+  createdAt      DateTime  @default(now())
+  decidedAt      DateTime?
+  decidedBy      String? // name of the person who approved / dismissed
+  // Phase 3 – per-campaign optimization (kind = "optimize")
+  kind           String    @default("audit") // audit | optimize
+  campaignId     String?
+  campaignName   String?
+  rule           String? // rule that produced the suggestion (e.g. adset_expensive, adset_winner, ad_fatigue)
+  params         String    @default("{}") // JSON params for duplicate_adset / add_ad / new_draft
+  evidence       String    @default("{}") // JSON metrics at suggestion time
+  baseline       String? // JSON metrics for the 7 days before execution (to compare after 3 / 7 days)
+  evaluation     String? // JSON { d3?, d7? } results after acting
+  executedAt     DateTime?
+  auto           String? // on: done automatically by the system (lib/auto-rules.ts) | dryrun: trial, would have been done | null: human-approved
+  undoneAt       DateTime? // user clicked Undo on an automatic action
+  guide          String? // JSON step-by-step guide (Claude writes it when the user clicks "Step-by-step guide")
+  guideDone      String    @default("[]") // JSON indexes of steps ticked off
+
+  @@index([clientId, kind, status])
+}
+
+model CampaignDraft {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  brief     String // JSON
+  plan      String // JSON, xem CampaignPlanSchema
+  status    String   @default("draft") // draft | publishing | published
+  revision  Int      @default(0) // incremented each time Claude redrafts: the editor reloads, stale saves are rejected
+  result    String? // JSON ids of objects created on Meta, or the error
+  policy    String? // JSON per-ad content policy check (see lib/draft-policy-rules.ts); must pass before publishing
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Activity {
+  id        String   @id @default(cuid())
+  clientId  String?
+  client    Client?  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kind      String // sync | audit | analyze | execute | reject | publish | error
+  message   String
+  actor     String? // name of the actor; null = system (automatic job)
+  createdAt DateTime @default(now())
+
+  @@index([clientId, createdAt]) // foreign key + client activity page
+}
+
+// Knowledge base: client documents (proposals sent, contracts, products, price lists, brand...).
+// Claude reads the content (text extracted from the file) during audits, message analysis and planning.
+model KnowledgeDoc {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  category  String   @default("other") // proposal | project | product | brand | creative | faq | report | other
+  title     String
+  content   String // plain text, user-editable
+  useForAi  Boolean  @default(true) // on = sent to Claude
+  fileName  String? // original file name
+  filePath  String? // relative path inside data/knowledge
+  fileSize  Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId, category])
+}
+
+// Customer persona analysis (Claude): persona + fit score of each detailed targeting option.
+model AudienceAnalysis {
+  id           String             @id @default(cuid())
+  clientId     String
+  client       Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  report       String // JSON AudienceAnalysisSchema (persona, demographics, missing data)
+  candidates   String // JSON [{id,name,type,fit,persona,reason}] fit scores assigned by Claude
+  stats        String // JSON data used: conversation count, spend, document count...
+  model        String
+  inputTokens  Int                @default(0)
+  outputTokens Int                @default(0)
+  createdAt    DateTime           @default(now())
+  rankings     TargetingRanking[]
+}
+
+// Top targeting leaderboard at a point/period in time: fit score (Claude) + performance score (ad metrics).
+model TargetingRanking {
+  id           String            @id @default(cuid())
+  clientId     String
+  client       Client            @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  analysisId   String?
+  analysis     AudienceAnalysis? @relation(fields: [analysisId], references: [id], onDelete: SetNull)
+  label        String // e.g. "Before running ads" / "Ad data 7 days to 05/10"
+  stage        String // before_ads | with_ads
+  items        String // JSON RankedTargeting[]
+  benchmarkCpr Float?
+  spend        Float             @default(0)
+  createdAt    DateTime          @default(now())
+
+  @@index([clientId, createdAt])
+}
+
+// Login account. role is the system-level permission: admin = system administrator (sees every workspace, System settings);
+// member = regular user, sees only clients per workspace / granted access (lib/access.ts).
+model User {
+  id           String            @id @default(cuid())
+  email        String            @unique
+  name         String
+  passwordHash String // scrypt, xem lib/auth.ts
+  role         String            @default("member") // admin | member
+  active       Boolean           @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime          @default(now())
+  sessions     Session[]
+  memberships  WorkspaceMember[]
+  clientAccess ClientAccess[]
+  mcpTokens    McpToken[]
+}
+
+// Workspace (like Meta's Business Manager): owns clients and users. platform = the root workspace (the platform workspace).
+model Workspace {
+  id         String            @id @default(cuid())
+  name       String
+  platform   Boolean           @default(false)
+  /// The workspace's own Claude (encrypted ClaudeCred JSON). Empty: use the platform's Claude.
+  claudeCred String?
+  createdAt  DateTime          @default(now())
+  members    WorkspaceMember[]
+  clients    Client[]
+  invites    Invite[]
+}
+
+// Workspace member. owner/admin: full access to every client of the workspace + manage people; member: only assigned clients (ClientAccess).
+model WorkspaceMember {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        String    @default("member") // owner | admin | member
+  createdAt   DateTime  @default(now())
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+}
+
+// A person's permission on one client (like permissions on an ad account).
+// admin = full access (connections, token, permissions, delete); advertiser = run ads, approve, edit content; analyst = view only.
+model ClientAccess {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      String // admin | advertiser | analyst
+  grantedBy String?
+  createdAt DateTime @default(now())
+
+  @@unique([clientId, userId])
+  @@index([userId])
+}
+
+// Workspace invitation: single-use link /invite/<key>; the invitee sets their own name + password. The DB stores only the SHA-256 of the key.
+model Invite {
+  id          String    @id // sha256(key)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  email       String
+  role        String    @default("member") // role within the workspace
+  access      String    @default("[]") // JSON [{clientId, role}] pre-assigned on accepting the invitation
+  createdBy   String
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId, createdAt])
+}
+
+// Login session: the cookie holds a random token, the DB stores only its SHA-256 hash.
+model Session {
+  id        String   @id // sha256(token)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  userAgent String?
+  createdAt DateTime @default(now())
+}
+
+// ------------------------------------------------------------ Targeting library (replaces manual scraping with Python)
+
+// One Meta detailed targeting option. key = id, except education_statuses/relationship_statuses use "type:id" (ids are small numbers that collide between the 2 types).
+model TargetingItem {
+  key            String    @id
+  id             String
+  type           String // interests | behaviors | life_events | ... (key in the targeting spec)
+  name           String
+  path           String    @default("")
+  description    String?
+  topic          String?
+  industries     String? // JSON string[]: industries that surfaced this option (from the keyword sets)
+  source         String    @default("import") // browse | category | search | snowball | import
+  status         String    @default("active") // active | dead
+  vnLo           Float?
+  vnHi           Float?
+  globalLo       Float?
+  globalHi       Float? // audience size (Float because global sizes exceed the Int limit)
+  firstSeenAt    DateTime  @default(now())
+  lastSeenAt     DateTime  @default(now())
+  reachCheckedAt DateTime?
+  deadAt         DateTime?
+  // Check "does copying the name into the Ads Manager search box find exactly this option" (targetingsearch, vi_VN)
+  nameVi         String? // name Meta shows in Vietnamese-language Ads Manager
+  copyText       String? // text that was found by search (for the Copy button)
+  findable       Boolean? // null = not checked yet
+  findRank       Int? // position in the search results
+  findCheckedAt  DateTime?
+
+  @@index([type])
+  @@index([status])
+}
+
+// One update run (run in the background by scripts/targeting-worker.ts), with a checkpoint to resume after interruption.
+model TargetingRun {
+  id          String            @id @default(cuid())
+  kind        String // catalog | expand | reach | import
+  status      String            @default("queued") // queued | running | done | failed | cancelled
+  params      String            @default("{}") // JSON: seedSetIds, rounds, maxCalls, scope
+  progress    String            @default("{}") // JSON: calls, done, total, found, phase
+  checkpoint  String? // JSON in-progress state
+  stats       String? // JSON: added, dead, revived, sizeChanged, ...
+  log         String            @default("")
+  error       String?
+  clientId    String? // ad account / token used for scanning
+  triggeredBy String? // name of whoever clicked, or "Lịch tự động"
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @default(now()) @updatedAt // last progress update: used to detect interrupted runs
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  changes     TargetingChange[]
+
+  @@index([status, createdAt])
+}
+
+model TargetingChange {
+  id        String       @id @default(cuid())
+  runId     String
+  run       TargetingRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  itemKey   String
+  name      String
+  type      String
+  change    String // added | dead | revived | renamed | size_up | size_down
+  before    String? // JSON
+  after     String? // JSON
+  usedIn    String? // JSON [{kind, name, clientName}]: where a dead option is still in use
+  createdAt DateTime     @default(now())
+
+  @@index([runId])
+  @@index([change, createdAt])
+}
+
+// Industry keyword sets for "Expand by industry" (spreading from seed keywords via Meta's suggestions).
+model TargetingSeedSet {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  keywords  String // JSON string[]
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// System-wide key/value settings (targeting scan account, update schedule...).
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// ------------------------------------------------------------ Page data & ad breakdowns (full sync)
+
+model PagePost {
+  id          String        @id // {pageId}_{postId}
+  clientId    String
+  pageId      String? // the client Page this data belongs to (null = legacy data, main Page)
+  client      Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  message     String
+  type        String
+  permalink   String
+  picture     String?
+  createdTime DateTime
+  reactions   Int           @default(0)
+  comments    Int           @default(0)
+  shares      Int           @default(0)
+  syncedAt    DateTime      @default(now())
+  commentList PostComment[]
+
+  @@index([clientId, createdTime])
+}
+
+// Public comments on posts (commenter names are not stored).
+model PostComment {
+  id          String   @id
+  postId      String
+  post        PagePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  clientId    String
+  message     String
+  createdTime DateTime
+  likes       Int      @default(0)
+  fromPage    Boolean  @default(false) // reply from the Page itself
+
+  @@index([clientId])
+  @@index([postId]) // foreign key (see Message)
+}
+
+// 30-day ad metrics by breakdown (fully replaced on each sync).
+model AdBreakdown {
+  id          String  @id @default(cuid())
+  clientId    String
+  client      Client  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  dimension   String // age_gender | region | platform
+  key         String
+  spend       Float   @default(0)
+  impressions Int     @default(0)
+  reach       Int     @default(0)
+  clicks      Int     @default(0)
+  results     Float   @default(0)
+  estimated   Boolean @default(false) // estimated result (Meta returns no measured value for this dimension)
+  days        Int     @default(30) // date range of the sync
+
+  @@index([clientId, dimension])
+}
+
+// Per-client background job (e.g. "Full analysis": sync → messages → persona), handled by workzone-ai-ads-worker.
+model ClientJob {
+  id           String    @id @default(cuid())
+  clientId     String
+  client       Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kind         String // full_analysis | draft_campaigns
+  status       String    @default("queued") // queued | running | done | failed | cancelled
+  params       String    @default("{}") // JSON params (e.g. proposalId + selected ideas)
+  steps        String    @default("[]") // JSON [{key,label,status,detail}]
+  error        String?
+  triggeredBy  String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now()) @updatedAt
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  // Claim token of the current attempt: when the worker reclaims an (interrupted) job it issues a new token, so a still-alive old attempt cannot overwrite it.
+  allocationId String?
+
+  @@index([status, createdAt])
+  @@index([clientId, status])
+}
+
+// AI campaign proposals from the persona: ideas + questions for the user to clarify; once chosen, drafted into a draft.
+model CampaignProposal {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  status    String   @default("open") // open | drafting | used
+  report    String // JSON CampaignIdeasSchema
+  answers   String? // JSON {questionId: answer} the user's answers
+  chosen    String? // JSON number[] selected ideas
+  draftIds  String? // JSON string[] drafts created
+  model     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId, createdAt])
+}
+
+/**
+ * Ad set metrics over analysisDays days (including paused / archived ad sets), for scoring persona & targeting.
+ */
+model AdSetHistory {
+  id            String   @id // ad set id on Meta
+  clientId      String
+  client        Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  campaignId    String
+  campaignName  String   @default("")
+  name          String
+  status        String   @default("")
+  resultType    String
+  targeting     String   @default("{}")
+  adIds         String   @default("[]") // JSON string[]: links conversations (sourceAdId) to the ad set
+  days          Int
+  spend         Float    @default(0)
+  results       Float    @default(0)
+  impressions   Int      @default(0)
+  clicks        Int      @default(0)
+  recentSpend   Float    @default(0) // last 30 days (included in spend)
+  recentResults Float    @default(0)
+  syncedAt      DateTime @default(now())
+
+  @@index([clientId, resultType])
+}
+
+/**
+ * Performance of each targeting option for one client, relative to that client's own average (pooled by industry in lib/industry-stats.ts).
+ */
+model TargetingClientStat {
+  id          String   @id @default(cuid())
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  industryKey String
+  resultType  String
+  key         String // targetingKey, or "broad" = no detailed targeting
+  itemId      String?
+  name        String
+  type        String
+  spend       Float
+  results     Float
+  wSpend      Float // weighted (last 30 days x2)
+  wResults    Float
+  index       Float // client's average CPR / this option's CPR: > 1 is better than average
+  adSets      Int
+  updatedAt   DateTime @updatedAt
+
+  @@unique([clientId, resultType, key])
+  @@index([industryKey, resultType])
+}
+
+/**
+ * Leads from Instant Forms (Meta only allows reading them via the API for 90 days). Personal data is never sent to Claude.
+ */
+model Lead {
+  id           String   @id // lead id on Meta
+  clientId     String
+  client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  pageId       String
+  formId       String
+  formName     String   @default("")
+  adId         String?
+  adName       String?
+  campaignId   String?
+  campaignName String?
+  createdTime  DateTime
+  name         String   @default("")
+  phone        String?
+  phones       String   @default("[]") // JSON: all phone numbers in the form
+  email        String?
+  answers      String   @default("[]") // JSON [{q, a}] other questions (not name / phone / email)
+  platform     String? // fb | ig
+  isOrganic    Boolean  @default(false)
+  syncedAt     DateTime @default(now())
+
+  @@index([clientId, createdTime])
+}
+
+/**
+ * The platform's own ads: every ad ever seen in the client's connected ad account (kept even after the ad is deleted on Meta).
+ * Used to separate messages / forms brought in by our ads from ads of another agency (another ad account) running on the same Page.
+ */
+model OwnAd {
+  id           String   @id // ad id on Meta
+  clientId     String
+  client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  name         String   @default("")
+  campaignId   String?
+  campaignName String?
+  firstSeenAt  DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+
+  @@index([clientId])
+}
+
+/**
+ * Meta message webhook: customer clicked a click-to-Messenger ad (referral) → tells which ad the conversation came from.
+ */
+model AdReferral {
+  id        String   @id @default(cuid())
+  appId     String? // Meta app that sent the webhook
+  pageId    String
+  psid      String // Page-scoped user ID
+  adId      String
+  source    String   @default("ADS")
+  at        DateTime
+  createdAt DateTime @default(now())
+
+  @@index([pageId, psid, at])
+}
+
+/**
+ * Meta app that sends webhooks: App Secret (encrypted) for verifying the X-Hub-Signature-256 signature.
+ */
+model WebhookApp {
+  appId       String    @id
+  name        String    @default("")
+  secretEnc   String
+  lastEventAt DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+// Content review → run ads: posts / images / videos the user wants to run → Claude checks Meta policy
+// → rollout plan (multiple versions based on feedback) → finalize → campaign draft.
+model ContentReview {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  title     String
+  status    String   @default("new") // new | checking | checked | planning | planned | final | failed
+  items     String   @default("[]") // JSON ContentItem[]
+  policy    String? // JSON policy check result
+  brief     String? // JSON requirements for the plan (objective, budget, location, notes)
+  plans     String   @default("[]") // JSON plan versions (with user feedback)
+  chosen    Int? // finalized version
+  draftId   String?
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId, createdAt])
+}
+
+// Log of every Claude call (System settings → Usage tab): which task, which client, tokens, duration, errors.
+model AiUsage {
+  id           String   @id @default(cuid())
+  at           DateTime @default(now())
+  task         String
+  clientId     String?
+  /// Workspace of the call and the account used: "workspace" (own Claude) | "system" (the platform's Claude).
+  workspaceId  String?
+  source       String?
+  provider     String // cli | api
+  model        String   @default("")
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  ms           Int      @default(0)
+  images       Int      @default(0)
+  ok           Boolean  @default(true)
+  error        String?
+
+  @@index([at])
+  @@index([clientId, at])
+  @@index([workspaceId, at])
+}
+
+// Re-engagement (messaging customers who messaged the Page). Meta only lets a Page initiate messages within 24 hours of the customer's last message
+// (marketing messages beyond 24 hours and Message Tags were discontinued by Meta in 2026). Customers past 24 hours → retargeting ads.
+// A sequence must pass the policy check + human approval (status active) before sending; editing content / conditions returns it to draft.
+model NurtureFlow {
+  id             String        @id @default(cuid())
+  clientId       String
+  client         Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  name           String
+  pageId         String? // null = main Page
+  status         String        @default("draft") // draft | active | paused
+  // Audience
+  stages         String        @default("[]") // JSON: stages to send to ("_none" = not analyzed yet)
+  minScore       Int?
+  waitHours      Int           @default(3) // conversation silent for at least X hours
+  cooldownDays   Int           @default(7) // do not resend to the same person within N days (for this sequence)
+  maxPerRun      Int           @default(30)
+  // Schedule: auto = background process scans every everyHours hours (8am–9pm); not auto = only sends when "Send now" is clicked
+  auto           Boolean       @default(false)
+  everyHours     Int           @default(1)
+  message        String        @default("")
+  brief          String? // instructions for Claude to draft
+  suggestions    String        @default("[]") // JSON [{message, why}] drafted by Claude
+  policy         String? // JSON policy check result (with the key of the content that was checked)
+  approvedBy     String?
+  approvedAt     DateTime?
+  runRequestedAt DateTime? // "Send now" clicked: the background process sends within ~1 minute
+  lastRunAt      DateTime?
+  lastRunNote    String?
+  createdBy      String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  sends          NurtureSend[]
+
+  @@index([clientId])
+}
+
+model NurtureSend {
+  id             String      @id @default(cuid())
+  flowId         String
+  flow           NurtureFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  clientId       String
+  client         Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  pageId         String
+  psid           String
+  conversationId String?
+  customerName   String      @default("")
+  text           String
+  status         String // sent | failed | manual | test
+  error          String?
+  messageId      String?
+  sentBy         String?
+  sentAt         DateTime    @default(now())
+
+  @@index([flowId, psid])
+  @@index([clientId, sentAt])
+  @@index([pageId, psid, sentAt])
+}
+
+/**
+ * Customers who do not want re-engagement messages (replied "stop" / blocked manually by a user).
+ */
+model NurtureOptOut {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  pageId    String
+  psid      String
+  name      String   @default("")
+  reason    String   @default("")
+  createdAt DateTime @default(now())
+
+  @@unique([pageId, psid])
+}
+
+/**
+ * Actual sales feedback for each lead (lead form or conversation), entered on the web or from Google Sheet.
+ */
+model SalesFeedback {
+  id          String    @id @default(cuid())
+  clientId    String
+  client      Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  rowKey      String // F-<lead id> | M-<conversation id>
+  contact     String    @default("") // Contact: Được | Không nghe máy | Hẹn gọi lại (khách bận) | Sai số (reached | no answer | call back later (busy) | wrong number)
+  quality     String    @default("") // Tốt | Trung bình | Kém | Sai tệp (good | average | poor | wrong audience)
+  outcome     String    @default("") // Đang chăm | Đã chốt | Không mua | Bỏ lead (thôi nhắc) (nurturing | closed | not buying | dropped (stop reminders))
+  note        String    @default("")
+  source      String    @default("web") // web | sheet | link (confirmation page /l/ in the Zalo group)
+  updatedBy   String?
+  updatedAt   DateTime  @updatedAt
+  // Call-back reminders for "no answer" leads (lib/lead-confirm.ts runRecalls): time "no answer" was chosen / last reminder, number of reminders sent.
+  recallAt    DateTime?
+  recallCount Int       @default(0)
+
+  @@unique([clientId, rowKey])
+}
+
+// Client report: snapshot of the metrics at build time (public link /r/<key> always shows exactly the version sent) + send history (email, Telegram, Zalo).
+model ClientReport {
+  id        String    @id @default(cuid())
+  clientId  String
+  client    Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  period    String // report period: 7 | 30 | ...
+  since     String // YYYY-MM-DD
+  until     String
+  data      String // JSON CampaignReport
+  vars      String // JSON variables for the Zalo message template (spend, result count...), computed at build time
+  overrides String    @default("{}") // JSON template parameter values edited manually by the approver
+  message   String? // message text (email / Telegram / Zalo paste) edited manually by the approver; null = auto-composed from the metrics
+  keyHash   String // sha256 of the public link key
+  key       String // AES-GCM encrypted, to show the link again
+  status    String    @default("draft") // draft | sent | partial | failed | revoked
+  trigger   String    @default("manual") // manual | schedule
+  createdBy String
+  sentAt    DateTime?
+  sentBy    String?
+  sends     String    @default("[]") // JSON [{channel, name, to, ok, msgId, error, at}]
+  views     Int       @default(0)
+  viewedAt  DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([clientId, createdAt])
+  @@index([keyHash])
+}
+
+// Client report schedules (Notifications & reports → Report schedule; lib/report-schedule*.ts).
+// Each client can have several schedules (e.g. 9:00 daily report + 17:00 report-to-now), each with 1 report type + its own recipients.
+// The background process (scripts/targeting-worker.ts) checks every minute.
+model ReportSchedule {
+  id         String    @id @default(cuid())
+  clientId   String
+  client     Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kind       String // daily | today | 7 | 14 | 30 (REPORT_KINDS)
+  repeat     String    @default("daily") // daily | weekly | monthly
+  days       String    @default("[]") // JSON: weekly 1–7 (Monday … Sunday), monthly 1–28
+  hour       Int       @default(9) // client's local hour
+  minute     Int       @default(0)
+  autoSend   Boolean   @default(false) // false: build in advance, wait for an approver to click Send
+  targets    String    @default("") // JSON SendTargets; "" = all current recipients
+  active     Boolean   @default(true)
+  lastRunAt  DateTime?
+  lastResult String? // summary of the last run (shown on the web)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([clientId])
+}
+
+// Leads already announced to a group (prevents duplicates). id = "<clientId>:<kind>:<refId>"
+// Bot replies in groups (lib/lead-bot-report.ts): a group member mentions the bot with a question → the bot answers. Stored for review and to improve the bot's Instructions.
+model BotChat {
+  id         String   @id @default(cuid())
+  clientId   String? // null = group not linked to any client
+  channel    String // zalobot
+  chatId     String
+  fromName   String   @default("")
+  question   String
+  answer     String   @default("")
+  mode       String // report (template summary) | ai (Claude) | fallback (Claude failed → summary) | unlinked
+  answered   Boolean  @default(true) // false = Claude said it lacked the info to answer → consider adding bot Instructions
+  error      String?
+  sent       Boolean  @default(false)
+  ms         Int      @default(0)
+  createdAt  DateTime @default(now())
+  // Group asks the bot to remember something (on-call schedule, who is who, conventions…): Claude rewrites it as an instruction line, added to Instructions only after approval on the web.
+  note       String? // proposed note to remember
+  noteStatus String? // pending | added | dismissed
+
+  @@index([clientId, createdAt])
+  @@index([createdAt])
+}
+
+model LeadNotice {
+  id         String    @id
+  clientId   String
+  client     Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kind       String // form | chat | phone
+  refId      String // lead / conversation id
+  text       String
+  sends      String    @default("[]") // JSON [{channel, chatId, ok, error, at}]
+  createdAt  DateTime  @default(now())
+  // Confirmation via the /l/<code> link included in the message (Zalo Bot has no buttons). The call outcome is written to SalesFeedback by rowKey.
+  code       String? // secret code in the link (8 random chars); null = digest / old message, no link
+  rowKey     String? // F-<lead id> | M-<conversation id> (row in the Client list)
+  ackBy      String? // person who took the lead (name typed on the link page)
+  ackAt      DateTime?
+  remindedAt DateTime? // already reminded "nobody has taken it" (reminds once)
+
+  @@index([clientId, createdAt])
+  @@index([clientId, rowKey])
+  @@index([code])
+}
+
+// ------------------------------------------------------------ Google Ads (lib/google-ads-sync.ts)
+// Metrics on GAdsCampaign/AdGroup/Keyword/SearchTerm are the last 30 days as of the most recent sync; GAdsDaily is per day (90 days).
+// Money is converted from micros to the Google account's currency (Client.googleCurrency).
+
+model GAdsCampaign {
+  id              String  @id // Google campaign id
+  clientId        String
+  client          Client  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  name            String
+  status          String // ENABLED | PAUSED
+  channelType     String  @default("") // SEARCH | PERFORMANCE_MAX | DISPLAY | VIDEO ...
+  biddingStrategy String  @default("")
+  dailyBudget     Float?
+  spend           Float   @default(0)
+  impressions     Int     @default(0)
+  clicks          Int     @default(0)
+  conversions     Float   @default(0)
+  conversionValue Float   @default(0)
+  searchImprShare Float? // Search impression share (0–1)
+  lostBudgetShare Float? // impression share lost to budget
+  lostRankShare   Float? // impression share lost to rank
+  targetCpa       Float? // target CPA currently set (Maximize conversions / Target CPA); null = not set
+  budgetId        String? // budget id (campaign_budget) for editing
+  budgetShared    Boolean @default(false) // budget shared by multiple campaigns: editing it changes the other campaigns too
+  devices         String  @default("{}") // JSON { DESKTOP|MOBILE|TABLET: { spend, clicks, conversions, bidModifier } } 30 days
+  negatives       String  @default("[]") // JSON [{ text, matchType }] campaign-level negative keywords
+  schedule        String  @default("[]") // JSON [{ id, day, startHour, startMinute, endHour, endMinute }] ad schedule (empty = runs all day)
+  hours           String  @default("{}") // JSON { "0".."23": { spend, clicks, conversions } } by hour, 30 days
+  lastDayHours    String  @default("{}") // JSON { "0".."23": spend } by hour for yesterday (to see when the budget ran out)
+}
+
+// Google Ads changes made through the system (lib/google-ads-write.ts): pending-approval suggestions (rules / Claude) and a log of manual edits.
+// Kept separate from Recommendation (Meta) so Meta's optimization / automation flow never touches Google IDs.
+model GAdsChange {
+  id           String    @id @default(cuid())
+  clientId     String
+  client       Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kind         String // negatives | target_cpa | budget | device | keyword_status | campaign_status
+  campaignId   String
+  campaignName String    @default("")
+  title        String
+  rationale    String    @default("")
+  params       String    @default("{}") // JSON params for the kind (see lib/google-ads-write.ts GChangeParams)
+  before       String    @default("{}") // JSON values before the change (for reference / manual undo)
+  source       String    @default("manual") // manual | rule | claude
+  rule         String? // rule that produced the suggestion (lib/google-ads-rules.ts)
+  status       String    @default("pending") // pending | executed | rejected | failed
+  result       String?
+  createdAt    DateTime  @default(now())
+  decidedAt    DateTime?
+  decidedBy    String?
+
+  @@index([clientId, status])
+}
+
+model GAdsAdGroup {
+  id          String @id
+  clientId    String
+  client      Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  campaignId  String
+  name        String
+  status      String
+  spend       Float  @default(0)
+  impressions Int    @default(0)
+  clicks      Int    @default(0)
+  conversions Float  @default(0)
+}
+
+model GAdsKeyword {
+  id           String  @id // adGroupId~criterionId
+  clientId     String
+  client       Client  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  campaignId   String
+  adGroupId    String
+  text         String
+  matchType    String // EXACT | PHRASE | BROAD
+  status       String
+  qualityScore Int?
+  // The 3 Quality Score components: BELOW_AVERAGE | AVERAGE | ABOVE_AVERAGE (null = not yet rated by Google)
+  ctrQuality   String? // expected click-through rate
+  adRelevance  String? // ad relevance
+  landingPage  String? // landing page experience
+  spend        Float   @default(0)
+  impressions  Int     @default(0)
+  clicks       Int     @default(0)
+  conversions  Float   @default(0)
+}
+
+// Responsive search ads (RSA) of enabled campaigns, so Claude can write new ads and review landing pages.
+model GAdsAd {
+  id           String @id // adGroupId~adId
+  clientId     String
+  client       Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  campaignId   String
+  adGroupId    String
+  status       String
+  adStrength   String @default("") // POOR | AVERAGE | GOOD | EXCELLENT …
+  headlines    String @default("[]") // JSON string[]
+  descriptions String @default("[]") // JSON string[]
+  finalUrl     String @default("")
+  path1        String @default("")
+  path2        String @default("")
+  spend        Float  @default(0)
+  impressions  Int    @default(0)
+  clicks       Int    @default(0)
+  conversions  Float  @default(0)
+
+  @@index([clientId])
+}
+
+model GAdsSearchTerm {
+  id          String @id @default(cuid())
+  clientId    String
+  client      Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  campaignId  String
+  adGroupId   String
+  term        String
+  status      String // ADDED | EXCLUDED | ADDED_EXCLUDED | NONE
+  spend       Float  @default(0)
+  impressions Int    @default(0)
+  clicks      Int    @default(0)
+  conversions Float  @default(0)
+
+  @@index([clientId])
+}
+
+model GAdsDaily {
+  id              String @id @default(cuid())
+  clientId        String
+  client          Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  campaignId      String
+  date            String // YYYY-MM-DD
+  spend           Float  @default(0)
+  impressions     Int    @default(0)
+  clicks          Int    @default(0)
+  conversions     Float  @default(0)
+  conversionValue Float  @default(0)
+
+  @@unique([clientId, campaignId, date])
+}
+
+// ------------------------------------------------------------ KiotViet (lib/kiotviet-sync.ts), read-only
+// Cancelled / undeliverable invoices are dropped. Dates (date) are in VN time, YYYY-MM-DD.
+
+model KvBranch {
+  id       String @id @default(cuid())
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kvId     Int
+  name     String
+  address  String @default("")
+
+  @@unique([clientId, kvId])
+}
+
+model KvCustomer {
+  id            String    @id @default(cuid())
+  clientId      String
+  client        Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kvId          String
+  code          String    @default("")
+  name          String    @default("")
+  phone         String? // 0xxxxxxxxx (lib/pii normalizePhone); null = no valid phone number
+  gender        String? // nam | nu
+  birthDate     String? // YYYY-MM-DD
+  area          String    @default("") // locationName (province - district)
+  ward          String    @default("")
+  totalRevenue  Float     @default(0) // total purchases (computed by KiotViet)
+  totalInvoiced Float     @default(0)
+  createdDate   DateTime?
+  modifiedDate  DateTime?
+
+  @@unique([clientId, kvId])
+  @@index([clientId, phone])
+}
+
+/**
+ * Only invoices linked to a customer (to match phone numbers, build audiences, send orders back to Meta); walk-in invoices only add to KvDaily.
+ */
+model KvInvoice {
+  id           String   @id @default(cuid())
+  clientId     String
+  client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kvId         String
+  code         String   @default("")
+  purchaseDate DateTime
+  date         String
+  branchId     Int
+  customerId   String
+  total        Float    @default(0)
+  status       Int      @default(1)
+
+  @@unique([clientId, kvId])
+  @@index([clientId, date])
+  @@index([clientId, customerId])
+}
+
+/**
+ * Daily totals × branch (all invoices, including walk-in customers).
+ */
+model KvDaily {
+  id           String @id @default(cuid())
+  clientId     String
+  client       Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  date         String
+  branchId     Int
+  invoices     Int    @default(0)
+  revenue      Float  @default(0)
+  withCustomer Int    @default(0) // invoices linked to a customer
+
+  @@unique([clientId, date, branchId])
+}
+
+/**
+ * Items sold per day (all branches), keeping the most recent 120 days. revenue = quantity × (price − per-unit discount).
+ */
+model KvProductDaily {
+  id        String @id @default(cuid())
+  clientId  String
+  client    Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  date      String
+  productId String
+  code      String @default("")
+  name      String @default("")
+  qty       Float  @default(0)
+  revenue   Float  @default(0)
+
+  @@unique([clientId, date, productId])
+}
+
+// Per-SKU lift measurement (lib/sales-lift.ts): campaigns / ads boosting existing posts vs. KiotViet sales.
+// The system pre-fills ad ids, control SKUs, run period and baseline period; the user can edit them. Figures are always recomputed from KvProductDaily, results are not stored.
+model SalesLift {
+  id           String   @id @default(cuid())
+  clientId     String
+  client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  name         String
+  level        String // campaign | ad
+  objectId     String // campaign / ad id on Meta
+  objectName   String   @default("")
+  testIds      String   @default("[]") // JSON KiotViet productIds being advertised
+  controlIds   String   @default("[]") // JSON control productIds (same category, not advertised)
+  runStart     String // YYYY-MM-DD
+  runEnd       String? // null = up to yesterday
+  baseStart    String
+  baseEnd      String
+  branchWords  String   @default("") // branch keywords for detecting order comments, comma-separated
+  manualSpend  Float? // entered manually when Meta data cannot be read
+  manualOrders Int? // manual override of the order comment count
+  note         String   @default("") // why the system chose the defaults (baseline period, SKUs)
+  metaCache    String   @default("{}") // JSON Meta metrics + comments from the last read (see LiftMetaCache)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([clientId])
+}
+
+/**
+ * Leads pushed to HighLevel: Client list row (F-<lead id> | M-<conversation id>) ↔ contact + opportunity.
+ */
+model GhlLink {
+  id            String    @id @default(cuid())
+  clientId      String
+  client        Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  rowKey        String
+  contactId     String
+  opportunityId String?
+  stageId       String? // stage at the last read
+  status        String? // open | won | lost | abandoned
+  pushedAt      DateTime  @default(now())
+  pulledAt      DateTime?
+  dirtyAt       DateTime? // feedback edited in the system, waiting to be pushed to HighLevel
+  noteSent      String? // sales note already pushed as a note (not re-pushed unless changed)
+  dealOppId     String? // opportunity in the contract pipeline
+  dealStatus    String?
+
+  @@unique([clientId, rowKey])
+  @@index([clientId, opportunityId])
+}
+
+// ------------------------------------------------------------ MCP gateway (phase 4): users connect their own Claude to the system
+
+// Self-registered apps via OAuth (Claude.ai, Claude Desktop, Claude Code…): public clients, no secret, PKCE required.
+model McpClient {
+  id           String    @id // client_id
+  name         String
+  redirectUris String // JSON string[]
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime?
+}
+
+// Single-use OAuth authorization code, valid for 10 minutes. id = sha256(code).
+model McpCode {
+  id          String    @id
+  clientId    String
+  userId      String
+  redirectUri String
+  challenge   String // PKCE S256
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+// A person's access to the MCP gateway: personal token (created on the web, pasted into Claude Code) or OAuth token (Claude.ai / Desktop fetch it themselves).
+// Only the sha256 of the token is stored. Permissions mirror that person's permissions on the web (workspace / client).
+model McpToken {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind             String // personal | oauth
+  name             String
+  accessHash       String    @unique
+  refreshHash      String?   @unique
+  mcpClientId      String?
+  expiresAt        DateTime?
+  refreshExpiresAt DateTime?
+  lastUsedAt       DateTime?
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@index([userId])
+}
